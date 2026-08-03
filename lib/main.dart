@@ -7,6 +7,76 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
+class _RangeProxy {
+  _RangeProxy._(this._server, this._client, this._target, this._chunkSize);
+
+  final HttpServer _server;
+  final HttpClient _client;
+  final Uri _target;
+  final int _chunkSize;
+
+  Uri get url => Uri.parse('http://127.0.0.1:${_server.port}/media');
+
+  static Future<_RangeProxy> start(Uri target, {required int chunkSize}) async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final client = HttpClient()
+      ..userAgent =
+          'com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US) gzip';
+    final proxy = _RangeProxy._(server, client, target, chunkSize);
+    server.listen(proxy._forward);
+    return proxy;
+  }
+
+  Future<void> _forward(HttpRequest incoming) async {
+    try {
+      final outgoing = await _client.openUrl(incoming.method, _target);
+      outgoing.headers.set(HttpHeaders.refererHeader, 'https://www.youtube.com/');
+      final range = incoming.headers.value(HttpHeaders.rangeHeader);
+      if (range != null) {
+        outgoing.headers.set(HttpHeaders.rangeHeader, _boundedRange(range));
+      } else {
+        outgoing.headers.set(HttpHeaders.rangeHeader, 'bytes=0-${_chunkSize - 1}');
+      }
+
+      final upstream = await outgoing.close();
+      incoming.response.statusCode = upstream.statusCode;
+      const forwardedHeaders = {
+        HttpHeaders.acceptRangesHeader,
+        HttpHeaders.contentLengthHeader,
+        HttpHeaders.contentRangeHeader,
+        HttpHeaders.contentTypeHeader,
+        HttpHeaders.lastModifiedHeader,
+      };
+      upstream.headers.forEach((name, values) {
+        if (forwardedHeaders.contains(name.toLowerCase())) {
+          incoming.response.headers.set(name, values.join(', '));
+        }
+      });
+      await upstream.pipe(incoming.response);
+    } catch (_) {
+      incoming.response.statusCode = HttpStatus.badGateway;
+      await incoming.response.close();
+    }
+  }
+
+  String _boundedRange(String range) {
+    final match = RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(range.trim());
+    if (match == null) return range;
+    final start = int.parse(match.group(1)!);
+    final requestedEnd = match.group(2)!.isEmpty ? null : int.parse(match.group(2)!);
+    final maximumEnd = start + _chunkSize - 1;
+    final end = requestedEnd == null || requestedEnd > maximumEnd
+        ? maximumEnd
+        : requestedEnd;
+    return 'bytes=$start-$end';
+  }
+
+  Future<void> close() async {
+    await _server.close(force: true);
+    _client.close(force: true);
+  }
+}
+
 void main() => runApp(const YtCutterApp());
 
 class YtCutterApp extends StatelessWidget {
@@ -137,6 +207,8 @@ class _CutterPageState extends State<CutterPage> {
       _status = 'Video bilgileri ve 720p akışları alınıyor…';
     });
 
+    _RangeProxy? videoProxy;
+    _RangeProxy? audioProxy;
     try {
       final video = await _yt.videos
           .get(_url.text.trim())
@@ -158,6 +230,16 @@ class _CutterPageState extends State<CutterPage> {
       if (videos.isEmpty || audios.isEmpty) {
         throw StateError('Uygun 720p MP4 video veya ses akışı bulunamadı.');
       }
+
+      setState(() => _status = 'Güvenli medya bağlantısı hazırlanıyor…');
+      videoProxy = await _RangeProxy.start(
+        videos.first.url,
+        chunkSize: 1024 * 1024,
+      );
+      audioProxy = await _RangeProxy.start(
+        audios.first.url,
+        chunkSize: 64 * 1024,
+      );
 
       final directory = await _outputDirectory();
       await directory.create(recursive: true);
@@ -183,10 +265,10 @@ class _CutterPageState extends State<CutterPage> {
       // akışlarını yeniden kodlamadan MP4 içinde birleştirir.
       final command = '-y -rw_timeout 30000000 -user_agent $youtubeUserAgent '
           '-referer $youtubeReferer -ss ${_ffTime(start)} '
-          '-i ${_quote(videos.first.url.toString())} '
+          '-i ${_quote(videoProxy.url.toString())} '
           '-rw_timeout 30000000 -user_agent $youtubeUserAgent '
           '-referer $youtubeReferer -ss ${_ffTime(start)} '
-          '-i ${_quote(audios.first.url.toString())} '
+          '-i ${_quote(audioProxy.url.toString())} '
           '-t ${_ffTime(length)} -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart '
           '${_quote(output)}';
 
@@ -243,6 +325,8 @@ class _CutterPageState extends State<CutterPage> {
     } catch (error) {
       _showError('Video indirilemedi: $error');
     } finally {
+      await videoProxy?.close();
+      await audioProxy?.close();
       if (mounted) setState(() => _busy = false);
     }
   }
