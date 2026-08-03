@@ -51,13 +51,18 @@ class _CutterPageState extends State<CutterPage> {
   Duration? get _endValue => _parseTime(_end.text);
 
   Duration? _parseTime(String raw) {
-    final match = RegExp(r'^(\d{2})[.:](\d{2})[.:](\d{2})$').firstMatch(raw.trim());
-    if (match == null) return null;
-    final hours = int.parse(match.group(1)!);
-    final minutes = int.parse(match.group(2)!);
-    final seconds = int.parse(match.group(3)!);
-    if (minutes > 59 || seconds > 59) return null;
-    return Duration(hours: hours, minutes: minutes, seconds: seconds);
+    final value = raw.trim();
+    final shortDigits = RegExp(r'^(\d{2})(\d{2})$').firstMatch(value);
+    final shortSeparated = RegExp(r'^(\d{2})[.:](\d{2})$').firstMatch(value);
+    final shortMatch = shortDigits ?? shortSeparated;
+    if (shortMatch != null) {
+      final minutes = int.parse(shortMatch.group(1)!);
+      final seconds = int.parse(shortMatch.group(2)!);
+      if (seconds > 59) return null;
+      return Duration(minutes: minutes, seconds: seconds);
+    }
+
+    return null;
   }
 
   String _durationLabel() {
@@ -116,7 +121,10 @@ class _CutterPageState extends State<CutterPage> {
     final start = _startValue;
     final end = _endValue;
     if (_url.text.trim().isEmpty || start == null || end == null) {
-      _showError('Bağlantı, başlangıç ve bitiş zorunludur. Zaman biçimi: 00.00.00');
+      _showError(
+        'Bağlantı, başlangıç ve bitiş zorunludur. '
+        'Zamanı 00.00 veya 0000 biçiminde girin.',
+      );
       return;
     }
     if (end <= start) {
@@ -161,6 +169,10 @@ class _CutterPageState extends State<CutterPage> {
       final stamp = DateTime.now().millisecondsSinceEpoch;
       final output = '${directory.path}${Platform.pathSeparator}${safeTitle}_kesit_$stamp.mp4';
       final length = end - start;
+      final youtubeUserAgent = _quote(
+        'com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US) gzip',
+      );
+      final youtubeReferer = _quote('https://www.youtube.com/');
 
       setState(() {
         _progress = 0;
@@ -170,9 +182,11 @@ class _CutterPageState extends State<CutterPage> {
       // -ss girdilerden önce olduğu için FFmpeg, HTTP range istekleriyle
       // hedef zamana atlar; videonun tamamını indirmez. -c copy kaynak
       // akışlarını yeniden kodlamadan MP4 içinde birleştirir.
-      final command = '-y -rw_timeout 30000000 -ss ${_ffTime(start)} '
+      final command = '-y -rw_timeout 30000000 -user_agent $youtubeUserAgent '
+          '-referer $youtubeReferer -ss ${_ffTime(start)} '
           '-i ${_quote(videos.first.url.toString())} '
-          '-rw_timeout 30000000 -ss ${_ffTime(start)} '
+          '-rw_timeout 30000000 -user_agent $youtubeUserAgent '
+          '-referer $youtubeReferer -ss ${_ffTime(start)} '
           '-i ${_quote(audios.first.url.toString())} '
           '-t ${_ffTime(length)} -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart '
           '${_quote(output)}';
@@ -206,7 +220,14 @@ class _CutterPageState extends State<CutterPage> {
       final returnCode = await finishedSession.getReturnCode();
       if (!ReturnCode.isSuccess(returnCode)) {
         final logs = await finishedSession.getAllLogsAsString();
-        throw StateError('FFmpeg işlemi tamamlanamadı.\n$logs');
+        if (logs.contains('403 Forbidden') || logs.contains('access denied')) {
+          throw StateError(
+            'YouTube medya bağlantısını reddetti. Lütfen tekrar deneyin.',
+          );
+        }
+        throw StateError(
+          'Video işlemi tamamlanamadı. İnternet bağlantısını kontrol edip tekrar deneyin.',
+        );
       }
       setState(() {
         _progress = 1;
@@ -216,6 +237,8 @@ class _CutterPageState extends State<CutterPage> {
       _showError(error.message);
     } on TimeoutException catch (error) {
       _showError(error.message ?? 'Bağlantı zaman aşımına uğradı.');
+    } on StateError catch (error) {
+      _showError(error.message);
     } catch (error) {
       _showError('Video indirilemedi: $error');
     } finally {
@@ -346,12 +369,12 @@ class _CutterPageState extends State<CutterPage> {
       enabled: !_busy,
       onChanged: (_) => setState(() {}),
       keyboardType: TextInputType.datetime,
-      maxLength: 8,
+      maxLength: 5,
       decoration: InputDecoration(
-        labelText: label,
-        hintText: '00.00.00',
+        labelText: '$label (Dakika.Saniye)',
+        hintText: '00.00',
+        helperText: '00.00 veya 0000',
         counterText: '',
-        prefixIcon: const Icon(Icons.schedule),
         border: const OutlineInputBorder(),
       ),
     );
