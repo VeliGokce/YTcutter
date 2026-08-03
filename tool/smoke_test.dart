@@ -13,44 +13,60 @@ class RangeProxy {
   static Future<RangeProxy> start(Uri target, {required int chunkSize}) async {
     final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
     final client = HttpClient()
-      ..userAgent = 'com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US) gzip';
+      ..userAgent =
+          'com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US) gzip';
     final proxy = RangeProxy._(server, client, target, chunkSize);
     server.listen(proxy.forward);
     return proxy;
   }
 
   Future<void> forward(HttpRequest incoming) async {
-    final outgoing = await client.openUrl(incoming.method, target);
-    outgoing.headers.set(HttpHeaders.refererHeader, 'https://www.youtube.com/');
-    final range = incoming.headers.value(HttpHeaders.rangeHeader);
-    if (range != null) {
-      final match = RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(range.trim());
-      if (match != null) {
-        final start = int.parse(match.group(1)!);
-        final rawEnd = match.group(2)!;
-        final requestedEnd = rawEnd.isEmpty ? null : int.parse(rawEnd);
-        final maximumEnd = start + chunkSize - 1;
-        final end = requestedEnd == null || requestedEnd > maximumEnd
-            ? maximumEnd
-            : requestedEnd;
-        outgoing.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
-      } else {
-        outgoing.headers.set(HttpHeaders.rangeHeader, range);
+    try {
+      final requested = RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(
+        incoming.headers.value(HttpHeaders.rangeHeader) ?? 'bytes=0-',
+      );
+      var cursor = int.parse(requested?.group(1) ?? '0');
+      final requestedEnd = requested?.group(2)?.isEmpty ?? true
+          ? null
+          : int.parse(requested!.group(2)!);
+      final totalLength = int.parse(target.queryParameters['clen']!);
+      final finalEnd = requestedEnd == null || requestedEnd >= totalLength
+          ? totalLength - 1
+          : requestedEnd;
+      incoming.response.statusCode = HttpStatus.partialContent;
+      incoming.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+      incoming.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $cursor-$finalEnd/$totalLength',
+      );
+      incoming.response.contentLength = finalEnd - cursor + 1;
+      while (cursor <= finalEnd) {
+        final chunkEnd = (cursor + chunkSize - 1).clamp(cursor, finalEnd);
+        final upstream = await fetchChunk(cursor, chunkEnd);
+        if (upstream.statusCode != HttpStatus.partialContent) {
+          throw const HttpException('Invalid upstream chunk response');
+        }
+        await incoming.response.addStream(upstream);
+        cursor = chunkEnd + 1;
       }
-    } else {
-      outgoing.headers.set(HttpHeaders.rangeHeader, 'bytes=0-${chunkSize - 1}');
+      await incoming.response.close();
+    } catch (_) {
+      try {
+        incoming.response.statusCode = HttpStatus.badGateway;
+        await incoming.response.close();
+      } catch (_) {}
     }
-    final upstream = await outgoing.close();
-    print('proxy ${incoming.method} incomingRange=$range '
-        'outgoingRange=${outgoing.headers.value(HttpHeaders.rangeHeader)} '
-        'status=${upstream.statusCode}');
-    incoming.response.statusCode = upstream.statusCode;
-    upstream.headers.forEach((name, values) {
-      if ({'accept-ranges', 'content-length', 'content-range', 'content-type'}.contains(name)) {
-        incoming.response.headers.set(name, values.join(', '));
-      }
-    });
-    await upstream.pipe(incoming.response);
+  }
+
+  Future<HttpClientResponse> fetchChunk(int start, int end) async {
+    final outgoing = await client.getUrl(target);
+    outgoing.persistentConnection = false;
+    outgoing.headers.set(HttpHeaders.refererHeader, 'https://www.youtube.com/');
+    outgoing.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
+    final response = await outgoing.close();
+    print('chunk bytes=$start-$end status=${response.statusCode} '
+        'contentRange=${response.headers.value(HttpHeaders.contentRangeHeader)}');
+    return response;
   }
 
   Future<void> close() async {
@@ -61,7 +77,8 @@ class RangeProxy {
 
 Future<int> probe(Uri url) async {
   final client = HttpClient();
-  client.userAgent = 'com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US) gzip';
+  client.userAgent =
+      'com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US) gzip';
   try {
     final request = await client.getUrl(url);
     request.headers.set(HttpHeaders.rangeHeader, 'bytes=0-1023');
@@ -80,51 +97,108 @@ Future<void> main(List<String> args) async {
     final url = args.isEmpty
         ? 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
         : args.first;
+    final startSeconds = args.length > 1 ? int.parse(args[1]) : 0;
     final video = await yt.videos.get(url);
-    final manifest = await yt.videos.streamsClient.getManifest(video.id);
+    final manifest = await yt.videos.streamsClient.getManifest(
+      video.id,
+      ytClients: [YoutubeApiClient.androidVr],
+    );
     print('title=${video.title}; duration=${video.duration}');
     for (final stream in manifest.videoOnly) {
       final status = await probe(stream.url);
-      print('video itag=${stream.tag} ${stream.container} ${stream.videoResolution.height}p '
+      print(
+          'video itag=${stream.tag} ${stream.container} ${stream.videoResolution.height}p '
           '${stream.videoCodec} status=$status');
     }
     for (final stream in manifest.audioOnly) {
       final status = await probe(stream.url);
-      print('audio itag=${stream.tag} ${stream.container} ${stream.audioCodec} status=$status');
+      print(
+          'audio itag=${stream.tag} ${stream.container} ${stream.audioCodec} status=$status');
     }
     for (final stream in manifest.muxed) {
       final status = await probe(stream.url);
-      print('muxed itag=${stream.tag} ${stream.container} ${stream.videoResolution.height}p '
+      print(
+          'muxed itag=${stream.tag} ${stream.container} ${stream.videoResolution.height}p '
           'status=$status');
     }
 
     final selectedVideo = manifest.videoOnly.firstWhere(
-      (s) => s.container == StreamContainer.mp4 && s.videoResolution.height == 720,
+      (s) =>
+          s.container == StreamContainer.mp4 && s.videoResolution.height == 720,
     );
-    final selectedAudio = manifest.audioOnly.firstWhere(
-      (s) => s.container == StreamContainer.mp4,
-    );
+    final audioCandidates = manifest.audioOnly
+        .where(
+          (s) =>
+              s.container == StreamContainer.mp4 &&
+              s.audioCodec.toString().startsWith('mp4a'),
+        )
+        .toList()
+      ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+    final selectedAudio = audioCandidates.first;
+    print(
+        'video query keys=${selectedVideo.url.queryParameters.keys.toList()}');
     final videoProxy = await RangeProxy.start(
       selectedVideo.url,
       chunkSize: 1024 * 1024,
     );
     final audioProxy = await RangeProxy.start(
       selectedAudio.url,
-      chunkSize: 64 * 1024,
+      chunkSize: 256 * 1024,
     );
-    final output = File('${Directory.systemTemp.path}\\yt-cutter-proxy-smoke.mp4');
+    final output =
+        File('${Directory.systemTemp.path}\\yt-cutter-proxy-smoke.mp4');
     try {
       if (output.existsSync()) output.deleteSync();
+      final stopwatch = Stopwatch()..start();
       final result = await Process.run('C:\\ffmpeg\\bin\\ffmpeg.exe', [
-        '-y', '-ss', '00:00:03', '-i', videoProxy.url.toString(),
-        '-ss', '00:00:03', '-i', audioProxy.url.toString(),
-        '-t', '00:00:05', '-map', '0:v:0', '-map', '1:a:0',
-        '-c', 'copy', '-movflags', '+faststart', output.path,
+        '-y',
+        '-ss',
+        startSeconds.toString(),
+        '-i',
+        videoProxy.url.toString(),
+        '-ss',
+        startSeconds.toString(),
+        '-i',
+        audioProxy.url.toString(),
+        '-t',
+        '00:00:33',
+        '-map',
+        '0:v:0',
+        '-map',
+        '1:a:0',
+        '-c',
+        'copy',
+        '-avoid_negative_ts',
+        'make_zero',
+        '-movflags',
+        '+faststart',
+        output.path,
       ]);
+      stopwatch.stop();
       if (result.exitCode != 0 || !output.existsSync()) {
         throw StateError('Proxy FFmpeg cut failed: ${result.stderr}');
       }
-      print('proxy-cut bytes=${output.lengthSync()}');
+      final blackScan = await Process.run('C:\\ffmpeg\\bin\\ffmpeg.exe', [
+        '-i',
+        output.path,
+        '-vf',
+        'blackdetect=d=1:pix_th=0.98',
+        '-an',
+        '-f',
+        'null',
+        '-',
+      ]);
+      final blackLines = blackScan.stderr
+          .toString()
+          .split(RegExp(r'[\r\n]+'))
+          .where((line) => line.contains('black_start'))
+          .toList();
+      print(
+          'proxy-cut bytes=${output.lengthSync()} elapsed=${stopwatch.elapsed} '
+          'blackSegments=${blackLines.length}');
+      for (final line in blackLines) {
+        print(line);
+      }
     } finally {
       await videoProxy.close();
       await audioProxy.close();

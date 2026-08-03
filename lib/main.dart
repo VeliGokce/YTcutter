@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
@@ -29,46 +30,74 @@ class _RangeProxy {
 
   Future<void> _forward(HttpRequest incoming) async {
     try {
-      final outgoing = await _client.openUrl(incoming.method, _target);
-      outgoing.headers.set(HttpHeaders.refererHeader, 'https://www.youtube.com/');
-      final range = incoming.headers.value(HttpHeaders.rangeHeader);
-      if (range != null) {
-        outgoing.headers.set(HttpHeaders.rangeHeader, _boundedRange(range));
-      } else {
-        outgoing.headers.set(HttpHeaders.rangeHeader, 'bytes=0-${_chunkSize - 1}');
+      final requested = RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(
+        incoming.headers.value(HttpHeaders.rangeHeader) ?? 'bytes=0-',
+      );
+      var cursor = int.parse(requested?.group(1) ?? '0');
+      final requestedEnd = requested?.group(2)?.isEmpty ?? true
+          ? null
+          : int.parse(requested!.group(2)!);
+
+      var upstream = await _fetchChunk(cursor, requestedEnd);
+      if (upstream.statusCode != HttpStatus.partialContent) {
+        throw HttpException('Medya sunucusu ${upstream.statusCode} döndürdü');
+      }
+      final contentRange =
+          upstream.headers.value(HttpHeaders.contentRangeHeader);
+      final parsedRange = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$').firstMatch(
+        contentRange ?? '',
+      );
+      if (parsedRange == null) {
+        throw const FormatException('Geçersiz Content-Range');
+      }
+      final totalLength = int.parse(parsedRange.group(3)!);
+      final finalEnd = requestedEnd == null || requestedEnd >= totalLength
+          ? totalLength - 1
+          : requestedEnd;
+
+      incoming.response.statusCode = HttpStatus.partialContent;
+      incoming.response.headers.set(HttpHeaders.acceptRangesHeader, 'bytes');
+      incoming.response.headers.set(
+        HttpHeaders.contentRangeHeader,
+        'bytes $cursor-$finalEnd/$totalLength',
+      );
+      incoming.response.contentLength = finalEnd - cursor + 1;
+      final contentType = upstream.headers.contentType;
+      if (contentType != null) {
+        incoming.response.headers.contentType = contentType;
       }
 
-      final upstream = await outgoing.close();
-      incoming.response.statusCode = upstream.statusCode;
-      const forwardedHeaders = {
-        HttpHeaders.acceptRangesHeader,
-        HttpHeaders.contentLengthHeader,
-        HttpHeaders.contentRangeHeader,
-        HttpHeaders.contentTypeHeader,
-        HttpHeaders.lastModifiedHeader,
-      };
-      upstream.headers.forEach((name, values) {
-        if (forwardedHeaders.contains(name.toLowerCase())) {
-          incoming.response.headers.set(name, values.join(', '));
-        }
-      });
-      await upstream.pipe(incoming.response);
-    } catch (_) {
-      incoming.response.statusCode = HttpStatus.badGateway;
+      while (cursor <= finalEnd) {
+        final chunkRange =
+            upstream.headers.value(HttpHeaders.contentRangeHeader);
+        final chunkMatch = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$').firstMatch(
+          chunkRange ?? '',
+        );
+        if (chunkMatch == null) break;
+        final chunkEnd = int.parse(chunkMatch.group(2)!);
+        await incoming.response.addStream(upstream);
+        cursor = chunkEnd + 1;
+        if (cursor <= finalEnd) upstream = await _fetchChunk(cursor, finalEnd);
+      }
       await incoming.response.close();
+    } catch (_) {
+      try {
+        incoming.response.statusCode = HttpStatus.badGateway;
+        await incoming.response.close();
+      } catch (_) {}
     }
   }
 
-  String _boundedRange(String range) {
-    final match = RegExp(r'^bytes=(\d+)-(\d*)$').firstMatch(range.trim());
-    if (match == null) return range;
-    final start = int.parse(match.group(1)!);
-    final requestedEnd = match.group(2)!.isEmpty ? null : int.parse(match.group(2)!);
+  Future<HttpClientResponse> _fetchChunk(int start, int? requestedEnd) async {
     final maximumEnd = start + _chunkSize - 1;
     final end = requestedEnd == null || requestedEnd > maximumEnd
         ? maximumEnd
         : requestedEnd;
-    return 'bytes=$start-$end';
+    final outgoing = await _client.getUrl(_target);
+    outgoing.persistentConnection = false;
+    outgoing.headers.set(HttpHeaders.refererHeader, 'https://www.youtube.com/');
+    outgoing.headers.set(HttpHeaders.rangeHeader, 'bytes=$start-$end');
+    return outgoing.close();
   }
 
   Future<void> close() async {
@@ -108,6 +137,7 @@ class CutterPage extends StatefulWidget {
 }
 
 class _CutterPageState extends State<CutterPage> {
+  static const _storage = MethodChannel('com.veligokce.ytcutter/storage');
   final _url = TextEditingController();
   final _start = TextEditingController();
   final _end = TextEditingController();
@@ -178,12 +208,14 @@ class _CutterPageState extends State<CutterPage> {
   String _quote(String value) => '"${value.replaceAll('"', r'\"')}"';
 
   Future<Directory> _outputDirectory() async {
+    if (Platform.isAndroid) return getTemporaryDirectory();
     if (Platform.isWindows) {
       final downloads = '${Platform.environment['USERPROFILE']}\\Downloads';
       final directory = Directory(downloads);
       if (await directory.exists()) return directory;
     }
-    return (await getDownloadsDirectory()) ?? await getApplicationDocumentsDirectory();
+    return (await getDownloadsDirectory()) ??
+        await getApplicationDocumentsDirectory();
   }
 
   Future<void> _download() async {
@@ -216,15 +248,30 @@ class _CutterPageState extends State<CutterPage> {
       if (video.duration != null && end > video.duration!) {
         throw const FormatException('Bitiş zamanı video süresini aşıyor.');
       }
-      final manifest = await _yt.videos.streamsClient
-          .getManifest(video.id)
-          .timeout(const Duration(seconds: 45));
+      final manifest = await _yt.videos.streamsClient.getManifest(video.id,
+          ytClients: [
+            YoutubeApiClient.androidVr
+          ]).timeout(const Duration(seconds: 45));
       final videos = manifest.videoOnly
-          .where((s) => s.container == StreamContainer.mp4 && s.videoResolution.height <= 720)
+          .where(
+            (s) =>
+                s.container == StreamContainer.mp4 &&
+                s.videoResolution.height <= 720 &&
+                s.videoCodec.toString().startsWith('avc1'),
+          )
           .toList()
-        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+        ..sort((a, b) {
+          final resolution = b.videoResolution.height.compareTo(
+            a.videoResolution.height,
+          );
+          return resolution != 0 ? resolution : b.bitrate.compareTo(a.bitrate);
+        });
       final audios = manifest.audioOnly
-          .where((s) => s.container == StreamContainer.mp4)
+          .where(
+            (s) =>
+                s.container == StreamContainer.mp4 &&
+                s.audioCodec.toString().startsWith('mp4a'),
+          )
           .toList()
         ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
       if (videos.isEmpty || audios.isEmpty) {
@@ -238,7 +285,7 @@ class _CutterPageState extends State<CutterPage> {
       );
       audioProxy = await _RangeProxy.start(
         audios.first.url,
-        chunkSize: 64 * 1024,
+        chunkSize: 256 * 1024,
       );
 
       final directory = await _outputDirectory();
@@ -248,7 +295,8 @@ class _CutterPageState extends State<CutterPage> {
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
       final stamp = DateTime.now().millisecondsSinceEpoch;
-      final output = '${directory.path}${Platform.pathSeparator}${safeTitle}_kesit_$stamp.mp4';
+      final fileName = '${safeTitle}_kesit_$stamp.mp4';
+      final output = '${directory.path}${Platform.pathSeparator}$fileName';
       final length = end - start;
       final youtubeUserAgent = _quote(
         'com.google.android.youtube/20.10.38 (Linux; U; Android 14; en_US) gzip',
@@ -269,7 +317,8 @@ class _CutterPageState extends State<CutterPage> {
           '-rw_timeout 30000000 -user_agent $youtubeUserAgent '
           '-referer $youtubeReferer -ss ${_ffTime(start)} '
           '-i ${_quote(audioProxy.url.toString())} '
-          '-t ${_ffTime(length)} -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart '
+          '-t ${_ffTime(length)} -map 0:v:0 -map 1:a:0 -c copy '
+          '-avoid_negative_ts make_zero -movflags +faststart '
           '${_quote(output)}';
 
       final completion = Completer<bool>();
@@ -281,7 +330,8 @@ class _CutterPageState extends State<CutterPage> {
           final success = ReturnCode.isSuccess(returnCode);
           if (!success) {
             final logs = await finishedSession.getAllLogsAsString() ?? '';
-            ffmpegError = logs.contains('403 Forbidden') || logs.contains('access denied')
+            ffmpegError = logs.contains('403 Forbidden') ||
+                    logs.contains('access denied')
                 ? 'YouTube medya bağlantısını reddetti. Lütfen tekrar deneyin.'
                 : 'Video işlemi tamamlanamadı. İnternet bağlantısını kontrol edip tekrar deneyin.';
           }
@@ -299,10 +349,12 @@ class _CutterPageState extends State<CutterPage> {
           });
         },
       );
-      final timeoutSeconds = (120 + length.inSeconds * 2).clamp(120, 900).toInt();
+      final timeoutSeconds =
+          (120 + length.inSeconds * 2).clamp(120, 900).toInt();
       late bool success;
       try {
-        success = await completion.future.timeout(Duration(seconds: timeoutSeconds));
+        success =
+            await completion.future.timeout(Duration(seconds: timeoutSeconds));
       } on TimeoutException {
         await FFmpegKit.cancel(session.getSessionId());
         throw TimeoutException(
@@ -312,9 +364,19 @@ class _CutterPageState extends State<CutterPage> {
       if (!success) {
         throw StateError(ffmpegError ?? 'Video işlemi tamamlanamadı.');
       }
+      var savedLocation = output;
+      if (Platform.isAndroid) {
+        await _storage.invokeMethod<String>('saveToDownloads', {
+          'path': output,
+          'name': fileName,
+        });
+        final temporaryFile = File(output);
+        if (await temporaryFile.exists()) await temporaryFile.delete();
+        savedLocation = 'Download/YTCutter/$fileName';
+      }
       setState(() {
         _progress = 1;
-        _status = 'Tamamlandı: $output';
+        _status = 'Tamamlandı: $savedLocation';
       });
     } on FormatException catch (error) {
       _showError(error.message);
@@ -363,11 +425,16 @@ class _CutterPageState extends State<CutterPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    const Icon(Icons.content_cut_rounded, size: 54, color: Color(0xffef4444)),
+                    const Icon(Icons.content_cut_rounded,
+                        size: 54, color: Color(0xffef4444)),
                     const SizedBox(height: 12),
-                    Text('YT Cutter', textAlign: TextAlign.center, style: Theme.of(context).textTheme.headlineMedium),
+                    Text('YT Cutter',
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.headlineMedium),
                     const SizedBox(height: 6),
-                    const Text('Videonun tamamını indirmeden istediğiniz bölümü alın.', textAlign: TextAlign.center),
+                    const Text(
+                        'Videonun tamamını indirmeden istediğiniz bölümü alın.',
+                        textAlign: TextAlign.center),
                     const SizedBox(height: 28),
                     TextField(
                       controller: _url,
@@ -391,14 +458,18 @@ class _CutterPageState extends State<CutterPage> {
                     const SizedBox(height: 14),
                     Container(
                       padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(color: Colors.white.withValues(alpha: .05), borderRadius: BorderRadius.circular(10)),
+                      decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: .05),
+                          borderRadius: BorderRadius.circular(10)),
                       child: Row(
                         children: [
                           const Icon(Icons.timer_outlined),
                           const SizedBox(width: 10),
                           const Text('Kesit süresi:'),
                           const Spacer(),
-                          Text(_durationLabel(), style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 17)),
+                          Text(_durationLabel(),
+                              style: const TextStyle(
+                                  fontWeight: FontWeight.bold, fontSize: 17)),
                         ],
                       ),
                     ),
@@ -408,17 +479,21 @@ class _CutterPageState extends State<CutterPage> {
                       decoration: BoxDecoration(
                         color: const Color(0xffef4444).withValues(alpha: .08),
                         borderRadius: BorderRadius.circular(10),
-                        border: Border.all(color: const Color(0xffef4444).withValues(alpha: .22)),
+                        border: Border.all(
+                            color:
+                                const Color(0xffef4444).withValues(alpha: .22)),
                       ),
                       child: Row(
                         children: [
-                          const Icon(Icons.speed_rounded, color: Color(0xffef4444)),
+                          const Icon(Icons.speed_rounded,
+                              color: Color(0xffef4444)),
                           const SizedBox(width: 10),
                           const Text('Tahmini işlem süresi:'),
                           const Spacer(),
                           Text(
                             _estimateLabel(),
-                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                            style: const TextStyle(
+                                fontWeight: FontWeight.bold, fontSize: 16),
                           ),
                         ],
                       ),
@@ -427,17 +502,22 @@ class _CutterPageState extends State<CutterPage> {
                     FilledButton.icon(
                       onPressed: _busy ? null : _download,
                       icon: _busy
-                          ? const SizedBox.square(dimension: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                          ? const SizedBox.square(
+                              dimension: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2))
                           : const Icon(Icons.download_rounded),
                       label: Text(_busy ? 'İşleniyor…' : '720p MP4 indir'),
-                      style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
+                      style: FilledButton.styleFrom(
+                          padding: const EdgeInsets.symmetric(vertical: 16)),
                     ),
                     if (_progress != null) ...[
                       const SizedBox(height: 16),
                       LinearProgressIndicator(value: _progress),
                     ],
                     const SizedBox(height: 14),
-                    Text(_status, textAlign: TextAlign.center, style: Theme.of(context).textTheme.bodySmall),
+                    Text(_status,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.bodySmall),
                   ],
                 ),
               ),

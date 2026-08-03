@@ -10,6 +10,8 @@
 
 Kesit süresiyle birlikte internet ve işlem payını hesaba katan tahmini işlem süresi arayüzde gösterilir.
 
+Android çıktıları Dosyalar uygulamasında görünen `Download/YTCutter` klasörüne kaydedilir.
+
 Uygulama 720p MP4 görüntü ve sesi ayrı akışlardan alır; FFmpeg ile yeniden kodlamadan birleştirir. HTTP zaman/range araması sayesinde tüm video yerine istenen bölümü çevreleyen medya verileri alınır.
 
 ## GitHub üzerinden paketleme
