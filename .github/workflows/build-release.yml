@@ -26,13 +26,11 @@ jobs:
           java-version: '21'
       - run: flutter pub get
       - run: flutter analyze lib
-      - run: flutter build apk --release --split-per-abi
+      - run: flutter build apk --release --target-platform android-arm64
       - name: Dosyalari adlandir
         run: |
           mkdir -p release
-          cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk release/YT-Cutter-Android-arm64.apk
-          cp build/app/outputs/flutter-apk/app-armeabi-v7a-release.apk release/YT-Cutter-Android-arm32.apk
-          cp build/app/outputs/flutter-apk/app-x86_64-release.apk release/YT-Cutter-Android-x64.apk
+          cp build/app/outputs/flutter-apk/app-release.apk release/YT-Cutter-Android-arm64.apk
       - uses: actions/upload-artifact@v4
         with:
           name: YT-Cutter-Android

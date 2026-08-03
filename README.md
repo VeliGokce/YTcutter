@@ -8,6 +8,8 @@
 2. Başlangıç ve bitiş zamanını `00.00.00` biçiminde girin.
 3. **720p MP4 indir** düğmesine basın.
 
+Kesit süresiyle birlikte internet ve işlem payını hesaba katan tahmini işlem süresi arayüzde gösterilir.
+
 Uygulama 720p MP4 görüntü ve sesi ayrı akışlardan alır; FFmpeg ile yeniden kodlamadan birleştirir. HTTP zaman/range araması sayesinde tüm video yerine istenen bölümü çevreleyen medya verileri alınır.
 
 ## GitHub üzerinden paketleme
