@@ -42,11 +42,12 @@ class _RangeProxy {
       if (upstream.statusCode != HttpStatus.partialContent) {
         throw HttpException('Medya sunucusu ${upstream.statusCode} döndürdü');
       }
-      final contentRange =
-          upstream.headers.value(HttpHeaders.contentRangeHeader);
-      final parsedRange = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$').firstMatch(
-        contentRange ?? '',
+      final contentRange = upstream.headers.value(
+        HttpHeaders.contentRangeHeader,
       );
+      final parsedRange = RegExp(
+        r'^bytes (\d+)-(\d+)/(\d+)$',
+      ).firstMatch(contentRange ?? '');
       if (parsedRange == null) {
         throw const FormatException('Geçersiz Content-Range');
       }
@@ -68,11 +69,12 @@ class _RangeProxy {
       }
 
       while (cursor <= finalEnd) {
-        final chunkRange =
-            upstream.headers.value(HttpHeaders.contentRangeHeader);
-        final chunkMatch = RegExp(r'^bytes (\d+)-(\d+)/(\d+)$').firstMatch(
-          chunkRange ?? '',
+        final chunkRange = upstream.headers.value(
+          HttpHeaders.contentRangeHeader,
         );
+        final chunkMatch = RegExp(
+          r'^bytes (\d+)-(\d+)/(\d+)$',
+        ).firstMatch(chunkRange ?? '');
         if (chunkMatch == null) break;
         final chunkEnd = int.parse(chunkMatch.group(2)!);
         await incoming.response.addStream(upstream);
@@ -144,6 +146,7 @@ class _CutterPageState extends State<CutterPage> {
   final _yt = YoutubeExplode();
   bool _busy = false;
   double? _progress;
+  String? _lastOutputDirectory;
   String _status = 'Başlamak için video bağlantısını ve zamanları girin.';
 
   Duration? get _startValue => _parseTime(_start.text);
@@ -236,6 +239,7 @@ class _CutterPageState extends State<CutterPage> {
     setState(() {
       _busy = true;
       _progress = null;
+      _lastOutputDirectory = null;
       _status = 'Video bilgileri ve 720p akışları alınıyor…';
     });
 
@@ -248,32 +252,35 @@ class _CutterPageState extends State<CutterPage> {
       if (video.duration != null && end > video.duration!) {
         throw const FormatException('Bitiş zamanı video süresini aşıyor.');
       }
-      final manifest = await _yt.videos.streamsClient.getManifest(video.id,
-          ytClients: [
-            YoutubeApiClient.androidVr
-          ]).timeout(const Duration(seconds: 45));
-      final videos = manifest.videoOnly
-          .where(
-            (s) =>
-                s.container == StreamContainer.mp4 &&
-                s.videoResolution.height <= 720 &&
-                s.videoCodec.toString().startsWith('avc1'),
-          )
-          .toList()
-        ..sort((a, b) {
-          final resolution = b.videoResolution.height.compareTo(
-            a.videoResolution.height,
-          );
-          return resolution != 0 ? resolution : b.bitrate.compareTo(a.bitrate);
-        });
-      final audios = manifest.audioOnly
-          .where(
-            (s) =>
-                s.container == StreamContainer.mp4 &&
-                s.audioCodec.toString().startsWith('mp4a'),
-          )
-          .toList()
-        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      final manifest = await _yt.videos.streamsClient
+          .getManifest(video.id, ytClients: [YoutubeApiClient.androidVr])
+          .timeout(const Duration(seconds: 45));
+      final videos =
+          manifest.videoOnly
+              .where(
+                (s) =>
+                    s.container == StreamContainer.mp4 &&
+                    s.videoResolution.height <= 720 &&
+                    s.videoCodec.toString().startsWith('avc1'),
+              )
+              .toList()
+            ..sort((a, b) {
+              final resolution = b.videoResolution.height.compareTo(
+                a.videoResolution.height,
+              );
+              return resolution != 0
+                  ? resolution
+                  : b.bitrate.compareTo(a.bitrate);
+            });
+      final audios =
+          manifest.audioOnly
+              .where(
+                (s) =>
+                    s.container == StreamContainer.mp4 &&
+                    s.audioCodec.toString().startsWith('mp4a'),
+              )
+              .toList()
+            ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
       if (videos.isEmpty || audios.isEmpty) {
         throw StateError('Uygun 720p MP4 video veya ses akışı bulunamadı.');
       }
@@ -311,7 +318,8 @@ class _CutterPageState extends State<CutterPage> {
       // -ss girdilerden önce olduğu için FFmpeg, HTTP range istekleriyle
       // hedef zamana atlar; videonun tamamını indirmez. -c copy kaynak
       // akışlarını yeniden kodlamadan MP4 içinde birleştirir.
-      final command = '-y -rw_timeout 30000000 -user_agent $youtubeUserAgent '
+      final command =
+          '-y -rw_timeout 30000000 -user_agent $youtubeUserAgent '
           '-referer $youtubeReferer -ss ${_ffTime(start)} '
           '-i ${_quote(videoProxy.url.toString())} '
           '-rw_timeout 30000000 -user_agent $youtubeUserAgent '
@@ -330,8 +338,8 @@ class _CutterPageState extends State<CutterPage> {
           final success = ReturnCode.isSuccess(returnCode);
           if (!success) {
             final logs = await finishedSession.getAllLogsAsString() ?? '';
-            ffmpegError = logs.contains('403 Forbidden') ||
-                    logs.contains('access denied')
+            ffmpegError =
+                logs.contains('403 Forbidden') || logs.contains('access denied')
                 ? 'YouTube medya bağlantısını reddetti. Lütfen tekrar deneyin.'
                 : 'Video işlemi tamamlanamadı. İnternet bağlantısını kontrol edip tekrar deneyin.';
           }
@@ -349,12 +357,14 @@ class _CutterPageState extends State<CutterPage> {
           });
         },
       );
-      final timeoutSeconds =
-          (120 + length.inSeconds * 2).clamp(120, 900).toInt();
+      final timeoutSeconds = (120 + length.inSeconds * 2)
+          .clamp(120, 900)
+          .toInt();
       late bool success;
       try {
-        success =
-            await completion.future.timeout(Duration(seconds: timeoutSeconds));
+        success = await completion.future.timeout(
+          Duration(seconds: timeoutSeconds),
+        );
       } on TimeoutException {
         await FFmpegKit.cancel(session.getSessionId());
         throw TimeoutException(
@@ -377,6 +387,9 @@ class _CutterPageState extends State<CutterPage> {
       setState(() {
         _progress = 1;
         _status = 'Tamamlandı: $savedLocation';
+        _lastOutputDirectory = Platform.isAndroid
+            ? 'Download/YTCutter'
+            : directory.path;
       });
     } on FormatException catch (error) {
       _showError(error.message);
@@ -390,6 +403,18 @@ class _CutterPageState extends State<CutterPage> {
       await videoProxy?.close();
       await audioProxy?.close();
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _openOutputDirectory() async {
+    try {
+      if (Platform.isAndroid) {
+        await _storage.invokeMethod<void>('openDownloads');
+      } else if (Platform.isWindows && _lastOutputDirectory != null) {
+        await Process.start('explorer.exe', [_lastOutputDirectory!]);
+      }
+    } catch (_) {
+      _showError('İndirilenler klasörü açılamadı.');
     }
   }
 
@@ -413,112 +438,174 @@ class _CutterPageState extends State<CutterPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620),
-            child: Card(
-              elevation: 12,
-              child: Padding(
-                padding: const EdgeInsets.all(28),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    const Icon(Icons.content_cut_rounded,
-                        size: 54, color: Color(0xffef4444)),
-                    const SizedBox(height: 12),
-                    Text('YT Cutter',
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.headlineMedium),
-                    const SizedBox(height: 6),
-                    const Text(
-                        'Videonun tamamını indirmeden istediğiniz bölümü alın.',
-                        textAlign: TextAlign.center),
-                    const SizedBox(height: 28),
-                    TextField(
-                      controller: _url,
-                      enabled: !_busy,
-                      keyboardType: TextInputType.url,
-                      decoration: const InputDecoration(
-                        labelText: 'YouTube video bağlantısı',
-                        hintText: 'https://www.youtube.com/watch?v=...',
-                        prefixIcon: Icon(Icons.link),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    Row(
+      resizeToAvoidBottomInset: true,
+      body: SafeArea(
+        child: LayoutBuilder(
+          builder: (context, viewport) => SingleChildScrollView(
+            keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+            padding: EdgeInsets.symmetric(
+              horizontal: viewport.maxWidth < 420 ? 12 : 24,
+              vertical: 16,
+            ),
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 620),
+                child: Card(
+                  elevation: 12,
+                  child: Padding(
+                    padding: const EdgeInsets.all(28),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        Expanded(child: _timeField(_start, 'Başlangıç')),
-                        const SizedBox(width: 14),
-                        Expanded(child: _timeField(_end, 'Bitiş')),
-                      ],
-                    ),
-                    const SizedBox(height: 14),
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: .05),
-                          borderRadius: BorderRadius.circular(10)),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.timer_outlined),
-                          const SizedBox(width: 10),
-                          const Text('Kesit süresi:'),
-                          const Spacer(),
-                          Text(_durationLabel(),
-                              style: const TextStyle(
-                                  fontWeight: FontWeight.bold, fontSize: 17)),
+                        const Icon(
+                          Icons.content_cut_rounded,
+                          size: 54,
+                          color: Color(0xffef4444),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          'YT Cutter',
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.headlineMedium,
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Videonun tamamını indirmeden istediğiniz bölümü alın.',
+                          textAlign: TextAlign.center,
+                        ),
+                        const SizedBox(height: 28),
+                        TextField(
+                          controller: _url,
+                          enabled: !_busy,
+                          keyboardType: TextInputType.url,
+                          decoration: const InputDecoration(
+                            labelText: 'YouTube video bağlantısı',
+                            hintText: 'https://www.youtube.com/watch?v=...',
+                            prefixIcon: Icon(Icons.link),
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        LayoutBuilder(
+                          builder: (context, fields) => fields.maxWidth < 360
+                              ? Column(
+                                  children: [
+                                    _timeField(_start, 'Başlangıç'),
+                                    const SizedBox(height: 14),
+                                    _timeField(_end, 'Bitiş'),
+                                  ],
+                                )
+                              : Row(
+                                  children: [
+                                    Expanded(
+                                      child: _timeField(_start, 'Başlangıç'),
+                                    ),
+                                    const SizedBox(width: 14),
+                                    Expanded(child: _timeField(_end, 'Bitiş')),
+                                  ],
+                                ),
+                        ),
+                        const SizedBox(height: 14),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: .05),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.timer_outlined),
+                              const SizedBox(width: 10),
+                              const Expanded(child: Text('Kesit süresi:')),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  _durationLabel(),
+                                  textAlign: TextAlign.end,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 17,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        Container(
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: const Color(
+                              0xffef4444,
+                            ).withValues(alpha: .08),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(
+                              color: const Color(
+                                0xffef4444,
+                              ).withValues(alpha: .22),
+                            ),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(
+                                Icons.speed_rounded,
+                                color: Color(0xffef4444),
+                              ),
+                              const SizedBox(width: 10),
+                              const Expanded(
+                                child: Text('Tahmini işlem süresi:'),
+                              ),
+                              const SizedBox(width: 8),
+                              Flexible(
+                                child: Text(
+                                  _estimateLabel(),
+                                  textAlign: TextAlign.end,
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 16,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        const SizedBox(height: 20),
+                        FilledButton.icon(
+                          onPressed: _busy ? null : _download,
+                          icon: _busy
+                              ? const SizedBox.square(
+                                  dimension: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                  ),
+                                )
+                              : const Icon(Icons.download_rounded),
+                          label: Text(_busy ? 'İşleniyor…' : '720p MP4 indir'),
+                          style: FilledButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 16),
+                          ),
+                        ),
+                        if (_progress != null) ...[
+                          const SizedBox(height: 16),
+                          LinearProgressIndicator(value: _progress),
                         ],
-                      ),
-                    ),
-                    const SizedBox(height: 10),
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: const Color(0xffef4444).withValues(alpha: .08),
-                        borderRadius: BorderRadius.circular(10),
-                        border: Border.all(
-                            color:
-                                const Color(0xffef4444).withValues(alpha: .22)),
-                      ),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.speed_rounded,
-                              color: Color(0xffef4444)),
-                          const SizedBox(width: 10),
-                          const Text('Tahmini işlem süresi:'),
-                          const Spacer(),
-                          Text(
-                            _estimateLabel(),
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold, fontSize: 16),
+                        const SizedBox(height: 14),
+                        Text(
+                          _status,
+                          textAlign: TextAlign.center,
+                          style: Theme.of(context).textTheme.bodySmall,
+                        ),
+                        if (_lastOutputDirectory != null) ...[
+                          const SizedBox(height: 10),
+                          OutlinedButton.icon(
+                            onPressed: _openOutputDirectory,
+                            icon: const Icon(Icons.folder_open_rounded),
+                            label: const Text('Klasöre git'),
                           ),
                         ],
-                      ),
+                      ],
                     ),
-                    const SizedBox(height: 20),
-                    FilledButton.icon(
-                      onPressed: _busy ? null : _download,
-                      icon: _busy
-                          ? const SizedBox.square(
-                              dimension: 18,
-                              child: CircularProgressIndicator(strokeWidth: 2))
-                          : const Icon(Icons.download_rounded),
-                      label: Text(_busy ? 'İşleniyor…' : '720p MP4 indir'),
-                      style: FilledButton.styleFrom(
-                          padding: const EdgeInsets.symmetric(vertical: 16)),
-                    ),
-                    if (_progress != null) ...[
-                      const SizedBox(height: 16),
-                      LinearProgressIndicator(value: _progress),
-                    ],
-                    const SizedBox(height: 14),
-                    Text(_status,
-                        textAlign: TextAlign.center,
-                        style: Theme.of(context).textTheme.bodySmall),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -534,6 +621,7 @@ class _CutterPageState extends State<CutterPage> {
       enabled: !_busy,
       onChanged: (_) => setState(() {}),
       keyboardType: TextInputType.datetime,
+      scrollPadding: const EdgeInsets.only(bottom: 140),
       maxLength: 5,
       decoration: InputDecoration(
         labelText: '$label (Dakika.Saniye)',

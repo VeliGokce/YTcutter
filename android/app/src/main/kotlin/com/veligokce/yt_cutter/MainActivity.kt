@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
 import io.flutter.embedding.android.FlutterActivity
@@ -20,6 +21,15 @@ class MainActivity : FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, channelName)
             .setMethodCallHandler { call, result ->
+                if (call.method == "openDownloads") {
+                    try {
+                        openDownloads()
+                        result.success(null)
+                    } catch (error: Exception) {
+                        result.error("OPEN_FAILED", error.message, null)
+                    }
+                    return@setMethodCallHandler
+                }
                 if (call.method != "saveToDownloads") {
                     result.notImplemented()
                     return@setMethodCallHandler
@@ -36,6 +46,26 @@ class MainActivity : FlutterActivity() {
                     result.error("SAVE_FAILED", error.message, null)
                 }
             }
+    }
+
+    private fun openDownloads() {
+        val folder = Uri.parse(
+            "content://com.android.externalstorage.documents/document/primary%3ADownload%2FYTCutter"
+        )
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(folder, DocumentsContract.Document.MIME_TYPE_DIR)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        try {
+            startActivity(viewIntent)
+        } catch (_: Exception) {
+            val picker = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    putExtra(DocumentsContract.EXTRA_INITIAL_URI, folder)
+                }
+            }
+            startActivity(picker)
+        }
     }
 
     private fun saveToDownloads(source: File, name: String): Uri {
