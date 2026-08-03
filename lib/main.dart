@@ -200,7 +200,9 @@ class _CutterPageState extends State<CutterPage> {
         null,
         (statistics) {
           if (!mounted || length.inMilliseconds == 0) return;
-          final ratio = (statistics.getTime() / length.inMilliseconds).clamp(0.0, 1.0);
+          final ratio = (statistics.getTime() / length.inMilliseconds)
+              .clamp(0.0, 1.0)
+              .toDouble();
           setState(() {
             _progress = ratio;
             _status = 'Seçilen aralık indiriliyor… %${(ratio * 100).round()}';
@@ -219,7 +221,7 @@ class _CutterPageState extends State<CutterPage> {
       }
       final returnCode = await finishedSession.getReturnCode();
       if (!ReturnCode.isSuccess(returnCode)) {
-        final logs = await finishedSession.getAllLogsAsString();
+        final logs = await finishedSession.getAllLogsAsString() ?? '';
         if (logs.contains('403 Forbidden') || logs.contains('access denied')) {
           throw StateError(
             'YouTube medya bağlantısını reddetti. Lütfen tekrar deneyin.',
