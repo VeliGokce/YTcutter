@@ -2,7 +2,6 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new/ffmpeg_session.dart';
 import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
@@ -191,11 +190,20 @@ class _CutterPageState extends State<CutterPage> {
           '-t ${_ffTime(length)} -map 0:v:0 -map 1:a:0 -c copy -movflags +faststart '
           '${_quote(output)}';
 
-      final completion = Completer<FFmpegSession>();
+      final completion = Completer<bool>();
+      String? ffmpegError;
       final session = await FFmpegKit.executeAsync(
         command,
-        (finishedSession) {
-          if (!completion.isCompleted) completion.complete(finishedSession);
+        (finishedSession) async {
+          final returnCode = await finishedSession.getReturnCode();
+          final success = ReturnCode.isSuccess(returnCode);
+          if (!success) {
+            final logs = await finishedSession.getAllLogsAsString() ?? '';
+            ffmpegError = logs.contains('403 Forbidden') || logs.contains('access denied')
+                ? 'YouTube medya bağlantısını reddetti. Lütfen tekrar deneyin.'
+                : 'Video işlemi tamamlanamadı. İnternet bağlantısını kontrol edip tekrar deneyin.';
+          }
+          if (!completion.isCompleted) completion.complete(success);
         },
         null,
         (statistics) {
@@ -210,26 +218,17 @@ class _CutterPageState extends State<CutterPage> {
         },
       );
       final timeoutSeconds = (120 + length.inSeconds * 2).clamp(120, 900).toInt();
-      late FFmpegSession finishedSession;
+      late bool success;
       try {
-        finishedSession = await completion.future.timeout(Duration(seconds: timeoutSeconds));
+        success = await completion.future.timeout(Duration(seconds: timeoutSeconds));
       } on TimeoutException {
         await FFmpegKit.cancel(session.getSessionId());
         throw TimeoutException(
           'İşlem beklenenden uzun sürdü ve durduruldu. İnternet bağlantısını kontrol edip tekrar deneyin.',
         );
       }
-      final returnCode = await finishedSession.getReturnCode();
-      if (!ReturnCode.isSuccess(returnCode)) {
-        final logs = await finishedSession.getAllLogsAsString() ?? '';
-        if (logs.contains('403 Forbidden') || logs.contains('access denied')) {
-          throw StateError(
-            'YouTube medya bağlantısını reddetti. Lütfen tekrar deneyin.',
-          );
-        }
-        throw StateError(
-          'Video işlemi tamamlanamadı. İnternet bağlantısını kontrol edip tekrar deneyin.',
-        );
+      if (!success) {
+        throw StateError(ffmpegError ?? 'Video işlemi tamamlanamadı.');
       }
       setState(() {
         _progress = 1;

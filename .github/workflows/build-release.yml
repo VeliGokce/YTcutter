@@ -27,11 +27,11 @@ jobs:
       - run: flutter pub get
       - run: dart run flutter_launcher_icons
       - run: flutter analyze lib
-      - run: flutter build apk --release --target-platform android-arm64
+      - run: flutter build apk --release
       - name: Dosyalari adlandir
         run: |
           mkdir -p release
-          cp build/app/outputs/flutter-apk/app-release.apk release/YT-Cutter-Android-arm64.apk
+          cp build/app/outputs/flutter-apk/app-release.apk release/YT-Cutter-Android.apk
       - uses: actions/upload-artifact@v4
         with:
           name: YT-Cutter-Android

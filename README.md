@@ -14,7 +14,7 @@ Uygulama 720p MP4 görüntü ve sesi ayrı akışlardan alır; FFmpeg ile yenide
 
 ## GitHub üzerinden paketleme
 
-Her `main` gönderiminde GitHub Actions Android APK ve Windows ZIP üretir. Actions sayfasındaki ilgili çalışmanın **Artifacts** bölümünden indirilebilir.
+Her `main` gönderiminde GitHub Actions telefon ve emülatör mimarilerini içeren tek Android APK ile Windows x64 ZIP üretir. Actions sayfasındaki ilgili çalışmanın **Artifacts** bölümünden indirilebilir.
 
 GitHub Release oluşturmak için bir sürüm etiketi gönderin:
 
