@@ -36,12 +36,13 @@ class MainActivity : FlutterActivity() {
                 }
                 val path = call.argument<String>("path")
                 val name = call.argument<String>("name")
+                val mimeType = call.argument<String>("mimeType") ?: "video/mp4"
                 if (path == null || name == null) {
                     result.error("INVALID_ARGUMENT", "Eksik dosya bilgisi", null)
                     return@setMethodCallHandler
                 }
                 try {
-                    result.success(saveToDownloads(File(path), name).toString())
+                    result.success(saveToDownloads(File(path), name, mimeType).toString())
                 } catch (error: Exception) {
                     result.error("SAVE_FAILED", error.message, null)
                 }
@@ -68,11 +69,11 @@ class MainActivity : FlutterActivity() {
         }
     }
 
-    private fun saveToDownloads(source: File, name: String): Uri {
+    private fun saveToDownloads(source: File, name: String, mimeType: String): Uri {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val values = ContentValues().apply {
                 put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                put(MediaStore.MediaColumns.MIME_TYPE, "video/mp4")
+                put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
                 put(
                     MediaStore.MediaColumns.RELATIVE_PATH,
                     Environment.DIRECTORY_DOWNLOADS + "/YTCutter"

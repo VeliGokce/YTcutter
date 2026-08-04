@@ -145,6 +145,7 @@ class _CutterPageState extends State<CutterPage> {
   final _end = TextEditingController();
   final _yt = YoutubeExplode();
   bool _busy = false;
+  bool _audioOnlyJob = false;
   double? _progress;
   String? _lastOutputDirectory;
   String _status = 'Başlamak için video bağlantısını ve zamanları girin.';
@@ -221,7 +222,7 @@ class _CutterPageState extends State<CutterPage> {
         await getApplicationDocumentsDirectory();
   }
 
-  Future<void> _download() async {
+  Future<void> _download({bool audioOnly = false}) async {
     final start = _startValue;
     final end = _endValue;
     if (_url.text.trim().isEmpty || start == null || end == null) {
@@ -238,9 +239,12 @@ class _CutterPageState extends State<CutterPage> {
 
     setState(() {
       _busy = true;
+      _audioOnlyJob = audioOnly;
       _progress = null;
       _lastOutputDirectory = null;
-      _status = 'Video bilgileri ve 720p akışları alınıyor…';
+      _status = audioOnly
+          ? 'Video bilgileri ve en kaliteli ses akışı alınıyor…'
+          : 'Video bilgileri ve 720p akışları alınıyor…';
     });
 
     _RangeProxy? videoProxy;
@@ -272,24 +276,19 @@ class _CutterPageState extends State<CutterPage> {
                   ? resolution
                   : b.bitrate.compareTo(a.bitrate);
             });
-      final audios =
-          manifest.audioOnly
-              .where(
-                (s) =>
-                    s.container == StreamContainer.mp4 &&
-                    s.audioCodec.toString().startsWith('mp4a'),
-              )
-              .toList()
-            ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
-      if (videos.isEmpty || audios.isEmpty) {
+      final audios = manifest.audioOnly.toList()
+        ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
+      if ((!audioOnly && videos.isEmpty) || audios.isEmpty) {
         throw StateError('Uygun 720p MP4 video veya ses akışı bulunamadı.');
       }
 
       setState(() => _status = 'Güvenli medya bağlantısı hazırlanıyor…');
-      videoProxy = await _RangeProxy.start(
-        videos.first.url,
-        chunkSize: 1024 * 1024,
-      );
+      if (!audioOnly) {
+        videoProxy = await _RangeProxy.start(
+          videos.first.url,
+          chunkSize: 1024 * 1024,
+        );
+      }
       audioProxy = await _RangeProxy.start(
         audios.first.url,
         chunkSize: 256 * 1024,
@@ -302,7 +301,8 @@ class _CutterPageState extends State<CutterPage> {
           .replaceAll(RegExp(r'\s+'), ' ')
           .trim();
       final stamp = DateTime.now().millisecondsSinceEpoch;
-      final fileName = '${safeTitle}_kesit_$stamp.mp4';
+      final extension = audioOnly ? 'mp3' : 'mp4';
+      final fileName = '${safeTitle}_kesit_$stamp.$extension';
       final output = '${directory.path}${Platform.pathSeparator}$fileName';
       final length = end - start;
       final youtubeUserAgent = _quote(
@@ -312,22 +312,27 @@ class _CutterPageState extends State<CutterPage> {
 
       setState(() {
         _progress = 0;
-        _status = 'Yalnızca seçilen aralık indiriliyor ve birleştiriliyor…';
+        _status = audioOnly
+            ? 'Seçilen ses aralığı yüksek kaliteli MP3’e çevriliyor…'
+            : 'Yalnızca seçilen aralık indiriliyor ve birleştiriliyor…';
       });
 
       // -ss girdilerden önce olduğu için FFmpeg, HTTP range istekleriyle
       // hedef zamana atlar; videonun tamamını indirmez. -c copy kaynak
       // akışlarını yeniden kodlamadan MP4 içinde birleştirir.
-      final command =
-          '-y -rw_timeout 30000000 -user_agent $youtubeUserAgent '
-          '-referer $youtubeReferer -ss ${_ffTime(start)} '
-          '-i ${_quote(videoProxy.url.toString())} '
+      final audioInput =
           '-rw_timeout 30000000 -user_agent $youtubeUserAgent '
           '-referer $youtubeReferer -ss ${_ffTime(start)} '
-          '-i ${_quote(audioProxy.url.toString())} '
-          '-t ${_ffTime(length)} -map 0:v:0 -map 1:a:0 -c copy '
-          '-avoid_negative_ts make_zero -movflags +faststart '
-          '${_quote(output)}';
+          '-i ${_quote(audioProxy.url.toString())} ';
+      final command = audioOnly
+          ? '-y $audioInput-t ${_ffTime(length)} -vn '
+                '-codec:a libmp3lame -q:a 0 -id3v2_version 3 ${_quote(output)}'
+          : '-y -rw_timeout 30000000 -user_agent $youtubeUserAgent '
+                '-referer $youtubeReferer -ss ${_ffTime(start)} '
+                '-i ${_quote(videoProxy!.url.toString())} $audioInput'
+                '-t ${_ffTime(length)} -map 0:v:0 -map 1:a:0 -c copy '
+                '-avoid_negative_ts make_zero -movflags +faststart '
+                '${_quote(output)}';
 
       final completion = Completer<bool>();
       String? ffmpegError;
@@ -341,7 +346,7 @@ class _CutterPageState extends State<CutterPage> {
             ffmpegError =
                 logs.contains('403 Forbidden') || logs.contains('access denied')
                 ? 'YouTube medya bağlantısını reddetti. Lütfen tekrar deneyin.'
-                : 'Video işlemi tamamlanamadı. İnternet bağlantısını kontrol edip tekrar deneyin.';
+                : '${audioOnly ? 'Ses' : 'Video'} işlemi tamamlanamadı. İnternet bağlantısını kontrol edip tekrar deneyin.';
           }
           if (!completion.isCompleted) completion.complete(success);
         },
@@ -379,6 +384,7 @@ class _CutterPageState extends State<CutterPage> {
         await _storage.invokeMethod<String>('saveToDownloads', {
           'path': output,
           'name': fileName,
+          'mimeType': audioOnly ? 'audio/mpeg' : 'video/mp4',
         });
         final temporaryFile = File(output);
         if (await temporaryFile.exists()) await temporaryFile.delete();
@@ -398,7 +404,7 @@ class _CutterPageState extends State<CutterPage> {
     } on StateError catch (error) {
       _showError(error.message);
     } catch (error) {
-      _showError('Video indirilemedi: $error');
+      _showError('${audioOnly ? 'Ses' : 'Video'} indirilemedi: $error');
     } finally {
       await videoProxy?.close();
       await audioProxy?.close();
@@ -570,20 +576,70 @@ class _CutterPageState extends State<CutterPage> {
                           ),
                         ),
                         const SizedBox(height: 20),
-                        FilledButton.icon(
-                          onPressed: _busy ? null : _download,
-                          icon: _busy
-                              ? const SizedBox.square(
-                                  dimension: 18,
-                                  child: CircularProgressIndicator(
-                                    strokeWidth: 2,
-                                  ),
-                                )
-                              : const Icon(Icons.download_rounded),
-                          label: Text(_busy ? 'İşleniyor…' : '720p MP4 indir'),
-                          style: FilledButton.styleFrom(
-                            padding: const EdgeInsets.symmetric(vertical: 16),
-                          ),
+                        LayoutBuilder(
+                          builder: (context, buttons) {
+                            final mp4Button = FilledButton.icon(
+                              onPressed: _busy ? null : () => _download(),
+                              icon: _busy && !_audioOnlyJob
+                                  ? const SizedBox.square(
+                                      dimension: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.video_file_rounded),
+                              label: Text(
+                                _busy && !_audioOnlyJob
+                                    ? 'İşleniyor…'
+                                    : '720p MP4 indir',
+                              ),
+                              style: FilledButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                              ),
+                            );
+                            final mp3Button = OutlinedButton.icon(
+                              onPressed: _busy
+                                  ? null
+                                  : () => _download(audioOnly: true),
+                              icon: _busy && _audioOnlyJob
+                                  ? const SizedBox.square(
+                                      dimension: 18,
+                                      child: CircularProgressIndicator(
+                                        strokeWidth: 2,
+                                      ),
+                                    )
+                                  : const Icon(Icons.audio_file_rounded),
+                              label: Text(
+                                _busy && _audioOnlyJob
+                                    ? 'İşleniyor…'
+                                    : 'Yüksek kalite MP3 indir',
+                              ),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(
+                                  vertical: 16,
+                                ),
+                              ),
+                            );
+                            if (buttons.maxWidth < 430) {
+                              return Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: [
+                                  mp4Button,
+                                  const SizedBox(height: 10),
+                                  mp3Button,
+                                ],
+                              );
+                            }
+                            return Row(
+                              children: [
+                                Expanded(child: mp4Button),
+                                const SizedBox(width: 10),
+                                Expanded(child: mp3Button),
+                              ],
+                            );
+                          },
                         ),
                         if (_progress != null) ...[
                           const SizedBox(height: 16),

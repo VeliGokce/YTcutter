@@ -147,8 +147,11 @@ Future<void> main(List<String> args) async {
     );
     final output =
         File('${Directory.systemTemp.path}\\yt-cutter-proxy-smoke.mp4');
+    final audioOutput =
+        File('${Directory.systemTemp.path}\\yt-cutter-proxy-smoke.mp3');
     try {
       if (output.existsSync()) output.deleteSync();
+      if (audioOutput.existsSync()) audioOutput.deleteSync();
       final stopwatch = Stopwatch()..start();
       final result = await Process.run('C:\\ffmpeg\\bin\\ffmpeg.exe', [
         '-y',
@@ -199,10 +202,32 @@ Future<void> main(List<String> args) async {
       for (final line in blackLines) {
         print(line);
       }
+      final audioResult = await Process.run('C:\\ffmpeg\\bin\\ffmpeg.exe', [
+        '-y',
+        '-ss',
+        startSeconds.toString(),
+        '-i',
+        audioProxy.url.toString(),
+        '-t',
+        '00:00:33',
+        '-vn',
+        '-codec:a',
+        'libmp3lame',
+        '-q:a',
+        '0',
+        '-id3v2_version',
+        '3',
+        audioOutput.path,
+      ]);
+      if (audioResult.exitCode != 0 || !audioOutput.existsSync()) {
+        throw StateError('Proxy MP3 cut failed: ${audioResult.stderr}');
+      }
+      print('proxy-mp3 bytes=${audioOutput.lengthSync()}');
     } finally {
       await videoProxy.close();
       await audioProxy.close();
       if (output.existsSync()) output.deleteSync();
+      if (audioOutput.existsSync()) audioOutput.deleteSync();
     }
   } finally {
     yt.close();
