@@ -614,7 +614,7 @@ class _CutterPageState extends State<CutterPage> {
                               label: Text(
                                 _busy && _audioOnlyJob
                                     ? 'İşleniyor…'
-                                    : 'Yüksek kalite MP3 indir',
+                                    : 'MP3 indir',
                               ),
                               style: OutlinedButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(
