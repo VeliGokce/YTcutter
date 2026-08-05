@@ -155,6 +155,19 @@ class _CutterPageState extends State<CutterPage> {
 
   Duration? _parseTime(String raw) {
     final value = raw.trim();
+    final longDigits = RegExp(r'^(\d{2})(\d{2})(\d{2})$').firstMatch(value);
+    final longSeparated = RegExp(
+      r'^(\d{2})[.:](\d{2})[.:](\d{2})$',
+    ).firstMatch(value);
+    final longMatch = longDigits ?? longSeparated;
+    if (longMatch != null) {
+      final hours = int.parse(longMatch.group(1)!);
+      final minutes = int.parse(longMatch.group(2)!);
+      final seconds = int.parse(longMatch.group(3)!);
+      if (minutes > 59 || seconds > 59) return null;
+      return Duration(hours: hours, minutes: minutes, seconds: seconds);
+    }
+
     final shortDigits = RegExp(r'^(\d{2})(\d{2})$').firstMatch(value);
     final shortSeparated = RegExp(r'^(\d{2})[.:](\d{2})$').firstMatch(value);
     final shortMatch = shortDigits ?? shortSeparated;
@@ -228,7 +241,7 @@ class _CutterPageState extends State<CutterPage> {
     if (_url.text.trim().isEmpty || start == null || end == null) {
       _showError(
         'Bağlantı, başlangıç ve bitiş zorunludur. '
-        'Zamanı 00.00 veya 0000 biçiminde girin.',
+        'Zamanı 00.00.00 biçiminde girin.',
       );
       return;
     }
@@ -678,11 +691,12 @@ class _CutterPageState extends State<CutterPage> {
       onChanged: (_) => setState(() {}),
       keyboardType: TextInputType.datetime,
       scrollPadding: const EdgeInsets.only(bottom: 140),
-      maxLength: 5,
+      maxLength: 8,
       decoration: InputDecoration(
-        labelText: '$label (Dakika.Saniye)',
-        hintText: '00.00',
-        helperText: '00.00 veya 0000',
+        labelText: label,
+        hintText: '00.00.00',
+        helperText: 'Saat.Dakika.Saniye\nÖrnek: 01.15.00',
+        helperMaxLines: 2,
         counterText: '',
         border: const OutlineInputBorder(),
       ),

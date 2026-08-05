@@ -5,7 +5,7 @@
 ## Kullanım
 
 1. YouTube video bağlantısını yapıştırın.
-2. Başlangıç ve bitiş zamanını `00.00` veya `0000` biçiminde girin.
+2. Başlangıç ve bitiş zamanını `00.00.00` (saat.dakika.saniye) biçiminde girin. Örneğin 75. dakika `01.15.00` olur. Eski `00.00` ve `0000` biçimleri de desteklenir.
 3. **720p MP4 indir** düğmesine basın.
 
 Kesit süresiyle birlikte internet ve işlem payını hesaba katan tahmini işlem süresi arayüzde gösterilir.
