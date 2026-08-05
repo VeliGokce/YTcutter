@@ -146,6 +146,7 @@ class _CutterPageState extends State<CutterPage> {
   final _yt = YoutubeExplode();
   bool _busy = false;
   bool _audioOnlyJob = false;
+  int _selectedQuality = 720;
   double? _progress;
   String? _lastOutputDirectory;
   String _status = 'Başlamak için video bağlantısını ve zamanları girin.';
@@ -257,7 +258,7 @@ class _CutterPageState extends State<CutterPage> {
       _lastOutputDirectory = null;
       _status = audioOnly
           ? 'Video bilgileri ve en kaliteli ses akışı alınıyor…'
-          : 'Video bilgileri ve 720p akışları alınıyor…';
+          : 'Video bilgileri ve ${_selectedQuality}p akışı alınıyor…';
     });
 
     _RangeProxy? videoProxy;
@@ -277,7 +278,7 @@ class _CutterPageState extends State<CutterPage> {
               .where(
                 (s) =>
                     s.container == StreamContainer.mp4 &&
-                    s.videoResolution.height <= 720 &&
+                    s.videoResolution.height == _selectedQuality &&
                     s.videoCodec.toString().startsWith('avc1'),
               )
               .toList()
@@ -292,7 +293,11 @@ class _CutterPageState extends State<CutterPage> {
       final audios = manifest.audioOnly.toList()
         ..sort((a, b) => b.bitrate.compareTo(a.bitrate));
       if ((!audioOnly && videos.isEmpty) || audios.isEmpty) {
-        throw StateError('Uygun 720p MP4 video veya ses akışı bulunamadı.');
+        throw StateError(
+          audioOnly
+              ? 'Uygun ses akışı bulunamadı.'
+              : 'Bu videoda seçilen ${_selectedQuality}p MP4 kalitesi bulunamadı.',
+        );
       }
 
       setState(() => _status = 'Güvenli medya bağlantısı hazırlanıyor…');
@@ -525,6 +530,26 @@ class _CutterPageState extends State<CutterPage> {
                                 ),
                         ),
                         const SizedBox(height: 14),
+                        DropdownButtonFormField<int>(
+                          initialValue: _selectedQuality,
+                          decoration: const InputDecoration(
+                            labelText: 'MP4 kalitesi',
+                            prefixIcon: Icon(Icons.high_quality_rounded),
+                            border: OutlineInputBorder(),
+                          ),
+                          items: const [
+                            DropdownMenuItem(value: 720, child: Text('720p')),
+                            DropdownMenuItem(value: 1080, child: Text('1080p')),
+                          ],
+                          onChanged: _busy
+                              ? null
+                              : (quality) {
+                                  if (quality != null) {
+                                    setState(() => _selectedQuality = quality);
+                                  }
+                                },
+                        ),
+                        const SizedBox(height: 14),
                         Container(
                           padding: const EdgeInsets.all(14),
                           decoration: BoxDecoration(
@@ -604,7 +629,7 @@ class _CutterPageState extends State<CutterPage> {
                               label: Text(
                                 _busy && !_audioOnlyJob
                                     ? 'İşleniyor…'
-                                    : '720p MP4 indir',
+                                    : 'MP4 indir',
                               ),
                               style: FilledButton.styleFrom(
                                 padding: const EdgeInsets.symmetric(

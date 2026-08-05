@@ -98,6 +98,7 @@ Future<void> main(List<String> args) async {
         ? 'https://www.youtube.com/watch?v=jNQXAC9IVRw'
         : args.first;
     final startSeconds = args.length > 1 ? int.parse(args[1]) : 0;
+    final quality = args.length > 2 ? int.parse(args[2]) : 720;
     final video = await yt.videos.get(url);
     final manifest = await yt.videos.streamsClient.getManifest(
       video.id,
@@ -124,7 +125,9 @@ Future<void> main(List<String> args) async {
 
     final selectedVideo = manifest.videoOnly.firstWhere(
       (s) =>
-          s.container == StreamContainer.mp4 && s.videoResolution.height == 720,
+          s.container == StreamContainer.mp4 &&
+          s.videoResolution.height == quality &&
+          s.videoCodec.toString().startsWith('avc1'),
     );
     final audioCandidates = manifest.audioOnly
         .where(

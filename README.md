@@ -1,18 +1,19 @@
 # YT Cutter
 
-Çalışanlar için, YouTube videosunun tamamını indirmeden seçilen zaman aralığını 720p sesli MP4 olarak kaydeden Windows ve Android uygulaması.
+Çalışanlar için, YouTube videosunun tamamını indirmeden seçilen zaman aralığını 720p veya 1080p sesli MP4 olarak kaydeden Windows ve Android uygulaması.
 
 ## Kullanım
 
 1. YouTube video bağlantısını yapıştırın.
 2. Başlangıç ve bitiş zamanını `00.00.00` (saat.dakika.saniye) biçiminde girin. Örneğin 75. dakika `01.15.00` olur. Eski `00.00` ve `0000` biçimleri de desteklenir.
-3. **720p MP4 indir** düğmesine basın.
+3. MP4 için `720p` veya `1080p` kalitesini seçin.
+4. **MP4 indir** veya **MP3 indir** düğmesine basın.
 
 Kesit süresiyle birlikte internet ve işlem payını hesaba katan tahmini işlem süresi arayüzde gösterilir.
 
 Android çıktıları Dosyalar uygulamasında görünen `Download/YTCutter` klasörüne kaydedilir.
 
-Uygulama 720p MP4 görüntü ve sesi ayrı akışlardan alır; FFmpeg ile yeniden kodlamadan birleştirir. HTTP zaman/range araması sayesinde tüm video yerine istenen bölümü çevreleyen medya verileri alınır.
+Uygulama seçilen 720p/1080p MP4 görüntü ve sesi ayrı akışlardan alır; FFmpeg ile yeniden kodlamadan birleştirir. HTTP zaman/range araması sayesinde tüm video yerine istenen bölümü çevreleyen medya verileri alınır.
 
 ## GitHub üzerinden paketleme
 
